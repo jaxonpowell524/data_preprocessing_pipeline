@@ -3,6 +3,7 @@ import csv
 import json
 import argparse
 import subprocess
+import sys
 from dataclasses import dataclass, asdict
 from typing import List, Optional
 from pathlib import Path
@@ -13,10 +14,9 @@ import mediapipe as mp
 import ffmpeg
 from scipy.signal import savgol_filter
 
-#terminal line to run with a dir of videos
-# python cut_video.py --inputs ./{directory name}/*.MOV --model pose_landmarker_full.task --outdir results --save-landmarks-csv --cut-clips
+# Terminal line to run with a dir of videos:
+# python cut_video.py --inputs ./{directory name}/*.MOV --model pose_landmarker_full.task --outdir results --save-landmarks-csv --cut-clips --review-clips
 
-#other args are at line ~530
 
 @dataclass
 class Segment:
@@ -211,15 +211,84 @@ def save_landmarks_csv(
             writer.writerow(row)
 
 
+def play_clip_external(video_path: str):
+    """
+    Open a clip using the operating system's default video player.
+
+    This is more reliable than cv2.imshow() on many systems because OpenCV
+    video windows sometimes fail to appear depending on the desktop/session.
+    """
+    video_path = str(Path(video_path).resolve())
+
+    try:
+        if os.name == "nt":
+            # Windows
+            os.startfile(video_path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            # macOS
+            subprocess.Popen(["open", video_path])
+        else:
+            # Linux
+            subprocess.Popen(["xdg-open", video_path])
+    except Exception as e:
+        print(f"Could not open clip automatically: {e}")
+        print(f"Open this file manually:{video_path}")
+
+
+def review_clip_interactively(video_path: str) -> bool:
+    """
+    Plays a clip and asks whether to keep, replay, or discard it.
+
+    Returns:
+      True  = keep clip
+      False = discard/delete clip
+    """
+    while True:
+        print(f"\nReviewing clip:\n  {video_path}")
+        print("Opening clip in your default video player...")
+        print("Use your video player's controls to pause, replay, or close the clip.")
+
+        play_clip_external(video_path)
+
+        choice = input(
+            "\nChoose: [k] keep, [r] replay, [d] discard/delete, [q] quit reviewing: "
+        ).strip().lower()
+
+        if choice in ("", "k", "keep"):
+            print("Kept clip.")
+            return True
+
+        if choice in ("r", "replay"):
+            continue
+
+        if choice in ("d", "discard", "delete"):
+            try:
+                os.remove(video_path)
+                print(f"Deleted clip:\n  {video_path}")
+            except FileNotFoundError:
+                print("Clip was already deleted.")
+            return False
+
+        if choice in ("q", "quit"):
+            print("Stopped interactive review. Keeping this clip by default.")
+            return True
+
+        print("Invalid choice. Type k, r, d, or q.")
+
+
 def cut_segments_ffmpeg(
     input_video: str,
     segments: List[Segment],
     output_dir: str,
     reencode: bool = True,
-    fps: Optional[float] = None
+    fps: Optional[float] = None,
+    review_clips: bool = False
 ):
     os.makedirs(output_dir, exist_ok=True)
     video_stem = Path(input_video).stem
+
+    kept_paths = []
+    deleted_paths = []
 
     for i, seg in enumerate(segments, start=1):
         out_path = os.path.join(output_dir, f"{video_stem}_swing_{i:03d}.mp4")
@@ -248,6 +317,19 @@ def cut_segments_ffmpeg(
                 .overwrite_output()
                 .run(quiet=True)
             )
+
+        print(f"\nCreated clip {i}/{len(segments)}:\n  {out_path}")
+
+        if review_clips:
+            kept = review_clip_interactively(out_path)
+            if kept:
+                kept_paths.append(out_path)
+            else:
+                deleted_paths.append(out_path)
+        else:
+            kept_paths.append(out_path)
+
+    return kept_paths, deleted_paths
 
 
 def detect_swings(
@@ -453,7 +535,7 @@ def gather_input_videos(inputs: Optional[List[str]], input_list: Optional[str]) 
                 if line and not line.startswith("#"):
                     video_paths.append(line)
 
-    # remove duplicates while preserving order
+    # Remove duplicates while preserving order.
     deduped = []
     seen = set()
     for p in video_paths:
@@ -516,14 +598,17 @@ def process_one_video(args, video_path: str):
 
     if args.cut_clips and segments:
         clips_dir = os.path.join(video_outdir, "clips")
-        cut_segments_ffmpeg(
+        kept_paths, deleted_paths = cut_segments_ffmpeg(
             input_video=video_path,
             segments=segments,
             output_dir=clips_dir,
             reencode=not args.copy_codec,
             fps=fps,
+            review_clips=args.review_clips,
         )
+
         print(f"Saved clips to:\n  {clips_dir}")
+        print(f"Kept {len(kept_paths)} clip(s), discarded {len(deleted_paths)} clip(s).")
 
 
 def main():
@@ -536,6 +621,11 @@ def main():
     parser.add_argument("--cut-clips", action="store_true", help="Export one clip per swing")
     parser.add_argument("--copy-codec", action="store_true", help="Use stream copy instead of re-encoding")
     parser.add_argument("--save-landmarks-csv", action="store_true", help="Save raw + smoothed landmarks to CSV")
+    parser.add_argument(
+        "--review-clips",
+        action="store_true",
+        help="After each clip is created, play it and choose whether to keep, replay, or delete it"
+    )
 
     parser.add_argument("--sg-window-length", type=int, default=11)
     parser.add_argument("--sg-polyorder", type=int, default=3)
@@ -543,10 +633,20 @@ def main():
     parser.add_argument("--score-smooth-window", type=int, default=9)
     parser.add_argument("--score-median-window", type=int, default=5)
 
-    parser.add_argument("--start-z", type=float, default=2.8)   # 'z' is the motion activation threshold (higher threshold, less motion needed)
-    parser.add_argument("--end-z", type=float, default=1.2)
-    parser.add_argument("--pre-pad", type=float, default=1.2)
-    parser.add_argument("--post-pad", type=float, default=0.35)
+    parser.add_argument(
+        "--start-z",
+        type=float,
+        default=3.0,
+        help="Motion activation threshold. Higher z means more motion is needed to start a detection."
+    )
+    parser.add_argument(
+        "--end-z",
+        type=float,
+        default=2.0,
+        help="Motion deactivation threshold. Higher z ends clips sooner; lower z ends clips later."
+    )
+    parser.add_argument("--pre-pad", type=float, default=2.0)
+    parser.add_argument("--post-pad", type=float, default=1.0)
     parser.add_argument("--min-swing-sec", type=float, default=0.7)
     parser.add_argument("--max-swing-sec", type=float, default=4.0)
     parser.add_argument("--min-gap-sec", type=float, default=0.75)
