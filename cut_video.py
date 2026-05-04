@@ -16,6 +16,7 @@ from scipy.signal import savgol_filter
 
 # Terminal line to run with a dir of videos:
 # python cut_video.py --inputs ./{directory name}/*.MOV --model pose_landmarker_full.task --outdir results --save-landmarks-csv --cut-clips --review-clips
+# python cut_video.py --inputs ./your_folder/*.MOV --model pose_landmarker_full.task --outdir results --save-landmarks-csv --cut-clips --review-clips
 
 
 @dataclass
@@ -211,33 +212,86 @@ def save_landmarks_csv(
             writer.writerow(row)
 
 
-def play_clip_external(video_path: str):
+def play_clip_opencv(video_path: str, window_name: str = "Clip Review") -> str:
     """
-    Open a clip using the operating system's default video player.
+    Play a video clip using OpenCV.
 
-    This is more reliable than cv2.imshow() on many systems because OpenCV
-    video windows sometimes fail to appear depending on the desktop/session.
+    Controls while video is playing:
+      space = pause/resume
+      r     = replay from beginning
+      k     = keep
+      d     = discard/delete
+      q/esc = quit review, keep by default
+
+    Returns:
+      "keep", "discard", "replay", or "quit"
     """
     video_path = str(Path(video_path).resolve())
 
-    try:
-        if os.name == "nt":
-            # Windows
-            os.startfile(video_path)  # type: ignore[attr-defined]
-        elif sys.platform == "darwin":
-            # macOS
-            subprocess.Popen(["open", video_path])
-        else:
-            # Linux
-            subprocess.Popen(["xdg-open", video_path])
-    except Exception as e:
-        print(f"Could not open clip automatically: {e}")
-        print(f"Open this file manually:{video_path}")
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"Could not open clip with OpenCV:\n  {video_path}")
+        return "quit"
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps <= 0:
+        fps = 30
+
+    delay_ms = max(1, int(1000 / fps))
+    paused = False
+
+    print("\nOpenCV controls:")
+    print("  space = pause/resume")
+    print("  r     = replay")
+    print("  k     = keep")
+    print("  d     = discard/delete")
+    print("  q/esc = quit review, keep by default")
+
+    while True:
+        if not paused:
+            ok, frame = cap.read()
+
+            if not ok:
+                # End of clip. Pause on last state and wait for user choice.
+                paused = True
+                print("\nEnd of clip. Press r to replay, k to keep, d to discard, or q to quit.")
+                continue
+
+            frame = cv2.resize(frame, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
+            cv2.imshow(window_name, frame)
+
+        key = cv2.waitKey(delay_ms if not paused else 0) & 0xFF
+
+        if key == 255:
+            # No key pressed.
+            continue
+
+        if key == ord(" "):
+            paused = not paused
+
+        elif key == ord("r"):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            paused = False
+
+        elif key == ord("k"):
+            cap.release()
+            cv2.destroyWindow(window_name)
+            return "keep"
+
+        elif key == ord("d"):
+            cap.release()
+            cv2.destroyWindow(window_name)
+            return "discard"
+
+        elif key == ord("q") or key == 27:
+            cap.release()
+            cv2.destroyWindow(window_name)
+            return "quit"
 
 
 def review_clip_interactively(video_path: str) -> bool:
     """
-    Plays a clip and asks whether to keep, replay, or discard it.
+    Plays a clip with OpenCV and asks whether to keep, replay, or discard it.
 
     Returns:
       True  = keep clip
@@ -245,23 +299,17 @@ def review_clip_interactively(video_path: str) -> bool:
     """
     while True:
         print(f"\nReviewing clip:\n  {video_path}")
-        print("Opening clip in your default video player...")
-        print("Use your video player's controls to pause, replay, or close the clip.")
 
-        play_clip_external(video_path)
+        choice = play_clip_opencv(video_path)
 
-        choice = input(
-            "\nChoose: [k] keep, [r] replay, [d] discard/delete, [q] quit reviewing: "
-        ).strip().lower()
-
-        if choice in ("", "k", "keep"):
+        if choice == "keep":
             print("Kept clip.")
             return True
 
-        if choice in ("r", "replay"):
+        if choice == "replay":
             continue
 
-        if choice in ("d", "discard", "delete"):
+        if choice == "discard":
             try:
                 os.remove(video_path)
                 print(f"Deleted clip:\n  {video_path}")
@@ -269,11 +317,12 @@ def review_clip_interactively(video_path: str) -> bool:
                 print("Clip was already deleted.")
             return False
 
-        if choice in ("q", "quit"):
+        if choice == "quit":
             print("Stopped interactive review. Keeping this clip by default.")
             return True
 
-        print("Invalid choice. Type k, r, d, or q.")
+        print("Invalid choice. Keeping clip by default.")
+        return True
 
 
 def cut_segments_ffmpeg(
