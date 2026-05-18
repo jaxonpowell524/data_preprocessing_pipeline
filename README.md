@@ -20,15 +20,12 @@ Designed for reviewing sports footage (e.g. golf swings) and saving the best cli
 ## Requirements
 
 - Python 3.8+
-- [ffmpeg](https://ffmpeg.org/download.html) — either on your PATH or placed as `ffmpeg.exe` in the same folder as the script
-
-Install Python dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**Dependencies:** `opencv-python`, `pygame`, `numpy`
+**Dependencies:** `opencv-python`, `pygame`, `numpy`, `imageio-ffmpeg` (bundles ffmpeg — no separate install needed)
 
 ---
 

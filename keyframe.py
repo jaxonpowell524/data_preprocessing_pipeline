@@ -29,10 +29,9 @@ import time
 import cv2
 import pygame
 import numpy as np
+import imageio_ffmpeg
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_LOCAL_FFMPEG = os.path.join(_SCRIPT_DIR, "ffmpeg.exe")
-FFMPEG = _LOCAL_FFMPEG if os.path.isfile(_LOCAL_FFMPEG) else "ffmpeg"
+FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 
 # ──────────────────────────────────────────────
 # Constants

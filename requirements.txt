@@ -1,6 +1,6 @@
 opencv-python
 numpy
 mediapipe
-ffmpeg-python
+imageio-ffmpeg
 scipy
 pygame
