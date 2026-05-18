@@ -35,10 +35,18 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-python keyframe.py /path/to/video/folder
+python keyframe.py INPUT OUTPUT_FOLDER
 ```
 
-The script will open every `.mp4` and `.mov` file in the folder sequentially. Extracted clips are saved to `<folder>/output_clips/`.
+`INPUT` can be a single video file or a folder of videos. The script will open every `.mp4` and `.mov` file sequentially and save extracted clips to `OUTPUT_FOLDER`.
+
+```bash
+# Single file
+python keyframe.py my_swing.mp4 clips/
+
+# Folder of videos
+python keyframe.py my_videos/ clips/
+```
 
 ---
 
@@ -61,14 +69,13 @@ The script will open every `.mp4` and `.mov` file in the folder sequentially. Ex
 
 ## Output
 
-Clips are named `<original_filename>_clip01.mp4`, `_clip02.mp4`, etc., and saved to:
+Clips are named `<original_filename>_clip01.mp4`, `_clip02.mp4`, etc., and saved to the `OUTPUT_FOLDER` you specify:
 
 ```
-<input_folder>/
-└── output_clips/
-    ├── swing01_clip01.mp4
-    ├── swing01_clip02.mp4
-    └── ...
+clips/
+├── swing01_clip01.mp4
+├── swing01_clip02.mp4
+└── ...
 ```
 
 Each clip covers the **4 seconds leading up to** the marked keyframe.
