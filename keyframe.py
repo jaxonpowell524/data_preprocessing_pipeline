@@ -25,6 +25,8 @@ import os
 import subprocess
 import argparse
 import time
+import queue
+import threading
 
 import cv2
 import pygame
@@ -185,6 +187,56 @@ def show_status(message: str):
 
 
 # ──────────────────────────────────────────────
+# Background frame decoder
+# ──────────────────────────────────────────────
+
+class FrameDecoder(threading.Thread):
+    """Decodes video frames in a background thread so the display loop never blocks on cap.read()."""
+
+    def __init__(self, cap, buffer_size=32):
+        super().__init__(daemon=True)
+        self._cap = cap
+        self._queue = queue.Queue(maxsize=buffer_size)
+        self._seek_queue = queue.Queue()
+        self._stopped = False
+
+    def seek(self, frame_no):
+        while not self._seek_queue.empty():
+            try:
+                self._seek_queue.get_nowait()
+            except queue.Empty:
+                break
+        self._seek_queue.put(frame_no)
+
+    def stop(self):
+        self._stopped = True
+
+    def run(self):
+        while not self._stopped:
+            try:
+                frame_no = self._seek_queue.get_nowait()
+                self._cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+                while True:
+                    try:
+                        self._queue.get_nowait()
+                    except queue.Empty:
+                        break
+            except queue.Empty:
+                pass
+
+            ret, frame = self._cap.read()
+            if not ret:
+                time.sleep(0.005)
+                continue
+
+            fn = int(self._cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+            try:
+                self._queue.put((fn, frame), timeout=0.1)
+            except queue.Full:
+                pass
+
+
+# ──────────────────────────────────────────────
 # Player
 # ──────────────────────────────────────────────
 
@@ -200,6 +252,9 @@ def play_video(mp4_path: str, video_number: int, total_videos: int) -> list:
     total_secs = (total_frames / fps_native) if total_frames > 0 else float("inf")
     vid_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     vid_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    decoder = FrameDecoder(cap)
+    decoder.start()
 
     pygame.display.set_caption(
         f"[{video_number}/{total_videos}] {os.path.basename(mp4_path)}"
@@ -226,7 +281,7 @@ def play_video(mp4_path: str, video_number: int, total_videos: int) -> list:
         nonlocal playback_pos
         playback_pos = max(0.0, min(secs, total_secs if total_secs != float("inf") else playback_pos))
         frame_no = int(playback_pos * fps_native)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+        decoder.seek(frame_no)
 
     running = True
 
@@ -291,22 +346,19 @@ def play_video(mp4_path: str, video_number: int, total_videos: int) -> list:
 
         if not ended and not paused:
             target_frame = int(playback_pos * fps_native)
-            actual_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
 
-            if target_frame < actual_frame - 1 or target_frame > actual_frame + int(fps_native * 2):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-
-            ret, frame = cap.read()
-            if ret:
-                last_frame = frame
-            else:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, target_frame - 1))
-                ret, frame = cap.read()
-                if ret:
+            # Only consume frames whose timestamp is at or behind target_frame
+            while True:
+                try:
+                    if decoder._queue.queue[0][0] > target_frame:
+                        break  # next frame is in the future; wait
+                except IndexError:
+                    break  # queue empty
+                try:
+                    fn, frame = decoder._queue.get_nowait()
                     last_frame = frame
-                else:
-                    ended = True
-                    paused = True
+                except queue.Empty:
+                    break
 
         sw, sh = screen.get_size()
         video_area_h = sh - BAR_HEIGHT
@@ -340,6 +392,7 @@ def play_video(mp4_path: str, video_number: int, total_videos: int) -> list:
         pygame.display.flip()
         clock.tick(60)
 
+    decoder.stop()
     cap.release()
     return keyframes
 
