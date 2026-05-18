@@ -670,11 +670,7 @@ def main():
     parser.add_argument("--cut-clips", action="store_true", help="Export one clip per swing")
     parser.add_argument("--copy-codec", action="store_true", help="Use stream copy instead of re-encoding")
     parser.add_argument("--save-landmarks-csv", action="store_true", help="Save raw + smoothed landmarks to CSV")
-    parser.add_argument(
-        "--review-clips",
-        action="store_true",
-        help="After each clip is created, play it and choose whether to keep, replay, or delete it"
-    )
+    parser.add_argument("--review-clips", action="store_true", help="After each clip is created, play it and choose whether to keep, replay, or delete it")
 
     parser.add_argument("--sg-window-length", type=int, default=11)
     parser.add_argument("--sg-polyorder", type=int, default=3)
